@@ -1,52 +1,65 @@
-import requests
 import time
 import json
-import os
+import requests
+from google.colab import drive
+from datetime import datetime, timedelta
 
-API_URL = "https://api.deriv.com/ticks"  # Example API endpoint
-FILE_PATH = "ticks_data.json"
-CHECKPOINT_FILE = "checkpoint.txt"
-TIMEOUT = 43200  # 12 hours in seconds
+# Mount Google Drive
+drive.mount('/content/drive')
 
-def collect_ticks():
-    start_time = time.time()
-    collected_ticks = []
+class SessionManager:
+    def __init__(self, duration_hours=3):
+        self.duration = timedelta(hours=duration_hours)
+        self.start_time = datetime.utcnow()
+    
+    def is_time_over(self):
+        return datetime.utcnow() - self.start_time > self.duration
 
-    if os.path.exists(CHECKPOINT_FILE):
-        with open(CHECKPOINT_FILE, 'r') as f:
-            last_tick_id = int(f.read())
-    else:
-        last_tick_id = 0
+# Function to handle API calls with retries
+def resilient_api_call(url, params=None, retries=5):
+    for i in range(retries):
+        try:
+            response = requests.get(url, params=params)
+            response.raise_for_status()
+            return response.json()
+        except requests.exceptions.RequestException:
+            if i < retries - 1:
+                time.sleep(2 ** i)  # Exponential backoff
+            else:
+                raise  # Move on if all retries fail
 
-    while len(collected_ticks) < 100000:
-        if time.time() - start_time > TIMEOUT:
-            print("12-hour timeout reached.")
+# Function to validate ticks data
+def validate_tick(tick):
+    return isinstance(tick, dict) and 'value' in tick and isinstance(tick['value'], (int, float))
+
+# Main data collection function
+def collect_ticks(target_count=100000):
+    ticks_collected = []
+    session_manager = SessionManager()
+
+    while len(ticks_collected) < target_count:
+        if session_manager.is_time_over():
+            # Save progress
+            with open('/content/drive/My Drive/ticks_checkpoint.json', 'w') as f:
+                json.dump(ticks_collected, f)
+            print("Session expired, progress saved.")
             break
         
-        try:
-            response = requests.get(f"{API_URL}?start_id={last_tick_id}")
-            response.raise_for_status()
-            data = response.json()
-            
-            ticks = data.get("ticks", [])
-            if ticks:
-                collected_ticks.extend(ticks)
-                last_tick_id = ticks[-1]['id']  # Update last tick id for checkpoint
+        # Simulate API call to collect a tick
+        tick = resilient_api_call('https://api.example.com/get_tick')
 
-                with open(CHECKPOINT_FILE, 'w') as f:
-                    f.write(str(last_tick_id))
+        if validate_tick(tick):
+            ticks_collected.append(tick)
+        else:
+            print("Invalid tick received, skipping.")
 
-                print(f"Collected {len(collected_ticks)} ticks...")
-
-            time.sleep(1)  # Respect API rate limits, adjust as necessary
-        except requests.exceptions.RequestException as e:
-            print(f"Connection error: {e}")
-            time.sleep(5)  # Wait before retrying on error
-
-    with open(FILE_PATH, 'w') as f:
-        json.dump(collected_ticks, f)
-
-    print("Collection complete. Total ticks collected:", len(collected_ticks))
+    # Final save if completed
+    if len(ticks_collected) == target_count:
+        with open('/content/drive/My Drive/ticks_data.json', 'w') as f:
+            json.dump(ticks_collected, f)
+        print("Data collection completed successfully.")
+    else:
+        print("Data collection incomplete. Data saved:", len(ticks_collected))
 
 if __name__ == "__main__":
     collect_ticks()
