@@ -1,40 +1,52 @@
+import requests
 import time
 import json
-import requests
+import os
 
-# Constants
-API_URL = 'https://api.example.com/data'
-DRIVE_STORAGE_PATH = '/content/drive/My Drive/Colab_Saves/'
-COLLECTION_LIMIT = 100000
-COLLECT_INTERVAL = 10  # seconds
+API_URL = "https://api.deriv.com/ticks"  # Example API endpoint
+FILE_PATH = "ticks_data.json"
+CHECKPOINT_FILE = "checkpoint.txt"
+TIMEOUT = 43200  # 12 hours in seconds
 
-# Function to collect data from API
+def collect_ticks():
+    start_time = time.time()
+    collected_ticks = []
 
-def collect_data():
-    collected_data = []
-    for _ in range(COLLECTION_LIMIT):
+    if os.path.exists(CHECKPOINT_FILE):
+        with open(CHECKPOINT_FILE, 'r') as f:
+            last_tick_id = int(f.read())
+    else:
+        last_tick_id = 0
+
+    while len(collected_ticks) < 100000:
+        if time.time() - start_time > TIMEOUT:
+            print("12-hour timeout reached.")
+            break
+        
         try:
-            response = requests.get(API_URL)
+            response = requests.get(f"{API_URL}?start_id={last_tick_id}")
             response.raise_for_status()
             data = response.json()
-            collected_data.append(data)
-            time.sleep(COLLECT_INTERVAL)  # Wait before next request
+            
+            ticks = data.get("ticks", [])
+            if ticks:
+                collected_ticks.extend(ticks)
+                last_tick_id = ticks[-1]['id']  # Update last tick id for checkpoint
+
+                with open(CHECKPOINT_FILE, 'w') as f:
+                    f.write(str(last_tick_id))
+
+                print(f"Collected {len(collected_ticks)} ticks...")
+
+            time.sleep(1)  # Respect API rate limits, adjust as necessary
         except requests.exceptions.RequestException as e:
-            print(f'Error collecting data: {e}')
-            # Handle API connection error, e.g., exponential backoff, retries, etc.
-            time.sleep(60)  # Wait 1 minute before retrying
-    return collected_data
+            print(f"Connection error: {e}")
+            time.sleep(5)  # Wait before retrying on error
 
-# Function to save data to Google Drive
+    with open(FILE_PATH, 'w') as f:
+        json.dump(collected_ticks, f)
 
-def save_to_drive(data):
-    filename = f'{DRIVE_STORAGE_PATH}collected_data_{int(time.time())}.json'
-    with open(filename, 'w') as f:
-        json.dump(data, f)
-    print(f'Data saved to {filename}')
+    print("Collection complete. Total ticks collected:", len(collected_ticks))
 
-# Main execution flow
-
-if __name__ == '__main__':
-    collected_data = collect_data()
-    save_to_drive(collected_data)
+if __name__ == "__main__":
+    collect_ticks()
