@@ -1,65 +1,55 @@
+import random
 import time
-import json
-import requests
-from google.colab import drive
-from datetime import datetime, timedelta
 
-# Mount Google Drive
-drive.mount('/content/drive')
+class DataValidator:
+    def __init__(self, threshold=0.02):
+        self.threshold = threshold
 
-class SessionManager:
-    def __init__(self, duration_hours=3):
-        self.duration = timedelta(hours=duration_hours)
-        self.start_time = datetime.utcnow()
-    
-    def is_time_over(self):
-        return datetime.utcnow() - self.start_time > self.duration
+    def is_valid(self, tick_data):
+        # Implement validation logic here
+        return abs(tick_data) < self.threshold  # Example validation check
 
-# Function to handle API calls with retries
-def resilient_api_call(url, params=None, retries=5):
-    for i in range(retries):
-        try:
-            response = requests.get(url, params=params)
-            response.raise_for_status()
-            return response.json()
-        except requests.exceptions.RequestException:
-            if i < retries - 1:
-                time.sleep(2 ** i)  # Exponential backoff
+class CheckpointManager:
+    def __init__(self, checkpoint_interval=1000):
+        self.checkpoint_interval = checkpoint_interval
+        self.checkpointed_data = []
+
+    def save_checkpoint(self, tick_data):
+        self.checkpointed_data.append(tick_data)
+        if len(self.checkpointed_data) >= self.checkpoint_interval:
+            self._store_checkpoint()  # Store to persistent storage
+            self.checkpointed_data = []
+
+    def _store_checkpoint(self):
+        # Implement storage logic to Google Drive or similar
+        print(f"Checkpoint saved with {len(self.checkpointed_data)} records.")
+
+class RobustTickCollector:
+    def __init__(self, validator, checkpoint_manager):
+        self.validator = validator
+        self.checkpoint_manager = checkpoint_manager
+        self.ticks_collected = 0
+
+    def collect_ticks(self, num_ticks):
+        collected_data = []
+        for _ in range(num_ticks):
+            tick_data = self._fetch_tick()  # Simulate fetching tick data
+            if self.validator.is_valid(tick_data):
+                collected_data.append(tick_data)
+                self.ticks_collected += 1
+                self.checkpoint_manager.save_checkpoint(tick_data)
             else:
-                raise  # Move on if all retries fail
+                print(f"Invalid tick data: {tick_data}")
+            time.sleep(0.1)  # Simulate network delay
+        return collected_data
 
-# Function to validate ticks data
-def validate_tick(tick):
-    return isinstance(tick, dict) and 'value' in tick and isinstance(tick['value'], (int, float))
+    def _fetch_tick(self):
+        # Simulate fetching tick data (replace with actual API call)
+        return random.uniform(-0.1, 0.1)
 
-# Main data collection function
-def collect_ticks(target_count=100000):
-    ticks_collected = []
-    session_manager = SessionManager()
-
-    while len(ticks_collected) < target_count:
-        if session_manager.is_time_over():
-            # Save progress
-            with open('/content/drive/My Drive/ticks_checkpoint.json', 'w') as f:
-                json.dump(ticks_collected, f)
-            print("Session expired, progress saved.")
-            break
-        
-        # Simulate API call to collect a tick
-        tick = resilient_api_call('https://api.example.com/get_tick')
-
-        if validate_tick(tick):
-            ticks_collected.append(tick)
-        else:
-            print("Invalid tick received, skipping.")
-
-    # Final save if completed
-    if len(ticks_collected) == target_count:
-        with open('/content/drive/My Drive/ticks_data.json', 'w') as f:
-            json.dump(ticks_collected, f)
-        print("Data collection completed successfully.")
-    else:
-        print("Data collection incomplete. Data saved:", len(ticks_collected))
-
-if __name__ == "__main__":
-    collect_ticks()
+if __name__ == '__main__':
+    validator = DataValidator()
+    checkpoint_manager = CheckpointManager()
+    collector = RobustTickCollector(validator, checkpoint_manager)
+    collected_ticks = collector.collect_ticks(100000)
+    print(f"Total valid ticks collected: {collector.ticks_collected}")
